@@ -26,7 +26,9 @@
 
 
 import numpy as np
+import sympy as sp
 import matplotlib.pyplot as plt
+import pickle
 
 
 class CartPole:
@@ -54,7 +56,7 @@ class CartPole:
 
   def initialize_linear_dynamics(self):
     """
-    Calculate and initialize the cartpole dynamics.
+    Calculate and initialize the cartpole dynamics for the linear approximation case.
     """
     # Continuous-Time system dynamics (linear approximation for small theta and theta_dot)
     # From Feedback Systems textbook, Example 3.2 Balance Systems
@@ -134,31 +136,28 @@ class CartPole:
     return x, u
 
 
-  def calculate_derivative(self, x_curr: np.ndarray, u_curr: np.ndarray) -> np.ndarray:
+  def initialize_dynamics(self):
     """
-    For the given state and control, returns the derivative of the system based on the equations of motion.
-    Inputs:
-      x: current state
-      u: current control input
-    Returns:
-      x_dot: state derivative
+    Calculate and initialize the full cartpole dynamics.
+    Linearizes the system and sets symbolic functions to evalue x_dot for the next step and the Jacobians in terms of x and u.
     """
-    # Calculate system dynamics
-    # Continuous-Time system dynamics from Feedback Systems textbook, Example 3.2 Balance Systems
-    u = u_curr[0][0]
-    s_theta = np.sin(x_curr[1])[0]   # sin(theta)
-    c_theta = np.cos(x_curr[1])[0]   # cos(theta)
+    # Define symbolic variables for states and controls
+    q, theta, q_dot, theta_dot = sp.symbols('q theta q_dot theta_dot')
+    u = sp.symbols('u')
 
-    # Equations of motion
-    q_dot = x_curr[2]
-    theta_dot = x_curr[3]
+    # Shorthand trigonometric functions
+    s_theta = sp.sin(theta)   # sin(theta)
+    c_theta = sp.cos(theta)   # cos(theta)
+
+    # Continuous-Time (equations of motion) system dynamics.
+    # From Feedback Systems textbook, Example 3.2 Balance Systems.
     q_ddot = ((-self.m * self.l * s_theta * theta_dot**2) + 
               (self.m * self.g * (self.m * self.l**2 / self.J_t) * s_theta * c_theta) - 
               (self.c * q_dot) - 
               ((self.lamb / self.J_t) * self.m * self.l * c_theta * theta_dot) +
               u) / (
               self.M_t - 
-              (self.m * (self.m * self.l**2 / self.J_t) * c_theta))
+              (self.m * (self.m * self.l**2 / self.J_t) * c_theta**2))
     theta_ddot = ((-self.m * self.l**2 * s_theta * c_theta * theta_dot**2) +
                   (self.M_t * self.g * self.l * s_theta) -
                   (self.c * self.l * c_theta * theta_dot) -
@@ -167,12 +166,22 @@ class CartPole:
                   (self.J_t * (self.M_t / self.m)) - 
                   (self.m * (self.l * c_theta)**2))
 
-    x_dot = np.array([q_dot, theta_dot, q_ddot, theta_ddot])
+    # State derivative vector
+    x_dot = sp.Matrix([q_dot, theta_dot, q_ddot, theta_ddot])
 
-    return x_dot
+    # Partial derivations (Jacobians)
+    x_vars = sp.Matrix([q, theta, q_dot, theta_dot])
+    Ak = x_dot.jacobian(x_vars)    # with respect to x
+    u_vars = sp.Matrix([u])
+    Bk = x_dot.jacobian(u_vars)    # with respect to u
+
+    # Convert symbolic expressions to numerical functions
+    self.x_func = sp.lambdify((q, theta, q_dot, theta_dot, u), x_dot, 'numpy')
+    self.Ak_func = sp.lambdify((q, theta, q_dot, theta_dot, u), Ak, 'numpy')
+    self.Bk_func = sp.lambdify((q, theta, q_dot, theta_dot, u), Bk, 'numpy')
 
 
-  def next_step(self, x_curr: np.ndarray, u_curr: np.ndarray) -> np.ndarray:
+  def next_state(self, x_curr: np.ndarray, u_curr: np.ndarray) -> np.ndarray:
     """
     For the given state and control, returns the next state.
     Inputs:
@@ -182,197 +191,198 @@ class CartPole:
       x_next: next state
     """
     # Calculate system derivative
-    x_dot = self.calculate_derivative(x_curr, u_curr)
+    x_dot = self.x_func(x_curr[0][0], x_curr[1][0], x_curr[2][0], x_curr[3][0], u_curr[0][0])
 
     # Discretize system dynamics with an approximation using the time step
-    x_next = x_curr + x_dot * self.Ts   # Euler integration
+    x_next = x_curr + self.Ts * x_dot   # Euler integration
 
     return x_next
 
 
-  def stage_cost(self, x_curr: np.ndarray, u_curr: np.ndarray, Q: np.ndarray, R: np.ndarray) -> float:
+  def approx_A_B(self, x_curr: np.ndarray, u_curr: np.ndarray) -> tuple[np.ndarray]:
     """
-    For the given state and control, returns the stage cost.
-    Inputs:
-      x: current state
-      u: current control input
-      Q: state cost matrix
-      R: control cost matrix
-    Returns:
-      l: stage cost
-    """
-    cost = x_curr.T @ Q @ x_curr + u_curr.T @ R @ u_curr
-
-    return cost[0][0]
-
-
-  def approx_A_B(self, x: np.ndarray, u: np.ndarray, eps=1e-3) -> tuple[np.ndarray]:
-    """
-    For the given state and control, returns approximations of the A and B
+    For the given state and control,  returns approximations of the A_k, B_k (the Jacobians of the dynamics in terms of state and control).
     matrices.
     Inputs:
-      x: 2D array of shape (n, 1)
-      u: 2D array of shape (m, 1)
+      x_curr: 2D array of shape (n, 1)
+      u_curr: 2D array of shape (m, 1)
     Returns:
-      A: 2D array of shape (n, n)
-      B: 2D array of shape (n, m)
+      A_k: 2D array of shape (n, n)
+      B_k: 2D array of shape (n, m)
     """
-    n = x.shape[0]    # state dimension
-    m = u.shape[0]    # control dimension
 
-    A = np.zeros((n, n))
-    B = np.zeros((n, m))
+    # Evaluate A and B using the symbolic dynamics equations
+    A_k = self.Ak_func(x_curr[0][0], x_curr[1][0], x_curr[2][0], x_curr[3][0], u_curr[0][0])
+    B_k = self.Bk_func(x_curr[0][0], x_curr[1][0], x_curr[2][0], x_curr[3][0], u_curr[0][0])
 
-    # Linearize the system around the given state and control by adding small perturbation
-    # Compute A matrix (partial derivative of f with respect to x)
-    for i in range(n):
-      dx = np.zeros_like(x)
-      dx[i] = eps
-      f_plus = self.calculate_derivative(x + dx, u)
-      f_minus = self.calculate_derivative(x - dx, u)
-      A_col = (f_plus - f_minus) / (2 * eps)
-      A[:,i] = A_col[:,0]
-
-    # Compute B matrix (partial derivative of f with respect to u)
-    for i in range(m):
-      du = np.zeros_like(u)
-      du[i] = eps
-      f_plus = self.calculate_derivative(x, u + du)
-      f_minus = self.calculate_derivative(x, u - du)
-      B_col = (f_plus - f_minus) / (2 * eps)
-      B[:,i] = B_col[:,0]
-
-    # TODO Does B change at all?
-
-    return A, B
+    return A_k, B_k
 
 
-  def forward_pass(self, x0_nominal: np.ndarray, u_nominal: list[np.ndarray], Q: np.ndarray, R: np.ndarray) -> tuple[list[np.ndarray], float]:
+  def forward_pass(self, x_nominal: list[np.ndarray], u_nominal: list[np.ndarray], d: list[np.ndarray], K: list[np.ndarray], Q:np.ndarray, R: np.ndarray) -> tuple[list[np.ndarray], list[np.ndarray], float]:
     """
     For the given initial state and nominal trajectory. Perform the forward pass of iLQR to compute the new state trajectory and total cost.
     Inputs:
-      x_initial: initial state in nominal trajectory
-      u_nominal: nominal trajectory for controls
-      Q: state cost matrix.
-      R: control cost matrix.
+      x_nominal: nominal state trajectory
+      u_nominal: nominal control trajectory
+      delta_u: optimal control corrections
     Returns:
-      x_new: new trajectory for states
-      J_total: total cost for the forward pass
+      x_new: new state trajectory
+      u_new: new control trajectory
     """
-    # Initialize variables
+    # Create lists for new trajectory
     x_new = [None] * (self.N + 1)
-    x_new[0] = x0_nominal
-    u_new = u_nominal
-    J_total = 0.0
+    u_new = [None] * self.N
+
+    # Initialize first state
+    x_new[0] = x_nominal[0]
+
+    J_total = 0   # Total trajectory cost
 
     # Loop forward
     for k in range(self.N):
-      # Compute next state
-      x_new[k + 1] = self.next_step(x_new[k], u_new[k])
+      # print("+++" + str(k) + "+++")
+      # Correct the control input
+      u_new[k] = u_nominal[k] + K[k] @ (x_new[k] - x_nominal[k]) + d[k]
 
-      # Update total cost
-      J_total += self.stage_cost(x_new[k], u_new[k], Q, R)
+      # print("a")
 
-    # add terminal cost
-    J_total += (x_new[self.N].T @ Q @ x_new[self.N])[0][0]
+      # Calculate next state
+      x_new[k + 1] = self.next_state(x_new[k], u_new[k])
 
-    return x_new, J_total
+      # print("b")
+
+      # Update trajectory cost
+      J_total += 1/2 * (x_new[k].T @ Q @ x_new[k] + u_new[k].T @ R @ u_new[k]).item()
+      
+      # print("c")
+
+    # Add terminal cost
+    J_total += (x_new[self.N].T @ Q @ x_new[self.N]).item()
+
+    return x_new, u_new, J_total
 
 
-  # TOOD Returns declaration
-  def backward_pass(self, x_new: list[np.ndarray], u_new: list[np.ndarray], Q: np.ndarray, R: np.ndarray):
+  def backward_pass(self, x_new: list[np.ndarray], u_new: list[np.ndarray], Q: np.ndarray, R: np.ndarray, H=np.array([[0], [0], [0], [0]])):
     """
     Perform the backward pass of iLQR to compute the feedforward control updates and feedback gains.
     Inputs:
       x_new: new state trajectory from the forward pass
       u_new: new control trajectory from the forward pass
-      Q: state cost matrix.
-      R: control cost matrix.
-      Q_f: terminal state cost matrix.
+      Q: state cost matrix
+      R: control cost matrix
+      H: bilinear cost matrix
     Returns:
-      delta_u: feedforward control updates.
-      K: feedback gains.
+      d:
+      K:
     """
-    # Initialize variables
-    delta_u = [None] * self.N
+    # Create lists for necessary variables
+    d = [None] * self.N
     K = [None] * self.N
 
-    # Initialize the value function (at time step N)
-    V_k = Q   # Terminal cost
-    v_k = x_new[self.N].T @ V_k @ x_new[self.N]   # Linear term in value function
+    # Initialize value function at final step
+    S = Q
+    s = Q @ (x_new[self.N])   # Desired final state is an array of 0s
 
     # Loop backward
     for k in range(self.N - 1, -1, -1):
+      # print("-" + str(k) + "-")
       # Linearize around the current trajectory
       A_k, B_k = self.approx_A_B(x_new[k], u_new[k])
 
-      # Calculate Q terms
-      Q_x = Q @ x_new[k]
-      Q_u = R @ u_new[k]
-      Q_xx = Q + A_k.T @ V_k @ A_k
-      Q_ux = B_k.T @ V_k @ A_k
-      Q_uu = R + B_k.T @ V_k @ B_k
+      # print("A")
 
-      # Compute feedback and feedforward terms
-      delta_u[k] = -np.linalg.inv(Q_uu) @ Q_u
-      K[k] = -np.linalg.inv(Q_uu) @ Q_ux
+      # Calculate stage cost derivatives
+      l_x = Q @ x_new[k]    # (4, 1)
+      l_u = R @ u_new[k]    # (1, 1)
+      l_xx = Q              # (4, 4)
+      l_uu = R              # (1, 1)
+      l_xu = H              # (4, 1)
+      l_ux = H.T            # (1, 4)
 
-      # Update the value function
-      V_k = Q_xx + K[k].T @ Q_uu @ K[k] + K[k].T @ Q_ux + Q_ux.T @ K[k]
-      v_k = Q_x + K[k].T @ Q_uu @ delta_u[k] + Q_ux.T @ delta_u[k]
-    
-    exit()
+      # Compute Q terms
+      Q_x = l_x + A_k.T @ s               # (4, 1)
+      Q_u = l_u + B_k.T @ s               # (1, 1)
+      Q_xx = l_xx + A_k.T @ S @ A_k     # (4, 4)
+      Q_uu = l_uu + B_k.T @ S @ B_k     # (1, 1)
+      Q_ux = l_ux + B_k.T @ S @ A_k     # (1, 4)
 
-    return delta_u, K
+      # print("B")
+
+      # Update the feedback law
+      d[k] = -np.linalg.inv(Q_uu) @ Q_u   # (1, 1)
+      K[k] = -np.linalg.inv(Q_uu) @ Q_ux  # (1, 4)
+      # print("C")
+
+      # Update the value function approximation
+      s = Q_x + K[k].T @ Q_uu @ d[k] + K[k].T @ Q_u + Q_ux.T @ d[k]   # (4, 1)
+      S = Q_xx + K[k].T @ Q_uu @ K[k] + K[k].T @ Q_ux + Q_ux.T @ K[k]   # (4, 4)
+
+      # print("D")
+
+    return d, K
 
 
-  def ilqr(self, x_initial: np.ndarray, u_nominal_initial: list[np.ndarray], Q: np.ndarray, R: np.ndarray) -> tuple[list[np.ndarray], list[np.ndarray]]:
+  def ilqr(self, x_nominal_initial: list[np.ndarray], u_nominal_initial: list[np.ndarray], Q: np.ndarray, R: np.ndarray) -> tuple[list[np.ndarray], list[np.ndarray]]:
     """
     Discrete-time iterative linear quadratic regulator for non-linear system.
     Compute the optimal control inputs for a non-linear system given an initial state, a nominal trajectory, and cost matrices. I.e. compute the control input that minimizes the cumulative cost.
     Inputs:
-      x_initial: initial state of the system
-      u_nominal_initial = nominal trajectory for controls
+      x_nominal_initial: initial nominal state trajectory
+      u_nominal_initial = initial nominal control trajectory
       Q: state cost matrix
       R: control cost matrix
     Returns:
-      x: calculated states (optimal trajectory)
-      u: calculated controls (optimal trajectory)
+      x: calculated state trajectory (optimal)
+      u: calculated control trajectory (optimal)
     """
     # Define number of iterations and tolerance
-    max_iterations = 100
-    tolerance = 1e-4
+    max_iterations = 10
+    tolerance = 1e-3
 
-    # Initialize nominal trajectory for the first time
-    x_nominal = [x_initial]
+    # Initialize full system dynamics
+    self.initialize_dynamics()
+
+    # Set initial nominal trajectories
+    x_nominal = x_nominal_initial
     u_nominal = u_nominal_initial
+
+    print(x_nominal[0])
+    print(u_nominal[0])
+    x_dot = self.x_func(x_nominal[0][0], x_nominal[1][0], x_nominal[2][0], x_nominal[3][0], u_nominal[0][0])
+    print(x_dot)
+
+    exit()
+
+    J_prev = 0   # Big number to prevent convergence
 
     # Iterate between forward and backward pass until convergence
     for i in range(max_iterations):
-      # Forward pass to generate new state trajectory
-      x_new, J_total = self.forward_pass(x_nominal[0], u_nominal, Q, R)
-
-      # Check for convergence
+      print("---" + str(i) + "---")
 
       # Backward pass to compute feedforward and feedback gains
-      delta_u, K = self.backward_pass(x_new, u_nominal, Q, R)
+      d, K = self.backward_pass(x_nominal, u_nominal, Q, R)
+      print("BBBBB")
 
-      exit()
+      # Forward pass to generate new state and control trajectories
+      x_nominal, u_nominal, J_total = self.forward_pass(x_nominal, u_nominal, d, K, Q, R)
+      print("FFFFF")
 
-      # Update nominal trajectory
-      # for k in range(self.N):
-      #   ...
-      # x_nominal = x_new
+      print(J_total)
 
-    x = ...
-    u = ...
-    return x, u
+      # Check for convergence based on the change in cost
+      cost_diff = abs(J_total - J_prev)
+      if cost_diff < tolerance:
+        print(f"Converged at iteration {i}. Cost difference: {cost_diff}")
+        break
+      J_prev = J_total
+
+    return x_nominal, u_nominal
 
 
 def main():
   # Define time step and horizon for the control problem
   time_step = 0.1
-  time_horizon = 30
+  time_horizon = 10
 
   # Define initial state [q, theta, q_dot, theta_dot]
   x_initial = np.array([
@@ -387,10 +397,10 @@ def main():
     [1, 0, 0, 0],
     [0, 1000, 0, 0],
     [0, 0, 1, 0],
-    [0, 0, 0, 10]
+    [0, 0, 0, 1]
   ])
   R = np.array([
-    [1]
+    [0.1]
   ])
 
   # Create the cartpole object
@@ -399,11 +409,31 @@ def main():
   # Run LQR algorithm to find optimal trajectory
   x, u = cartpole.lqr(x_initial, Q, R)
 
-  # Define nominal trajectory for iLQR
-  u_nominal = [np.array([[0]])] * cartpole.N
+  # Define nominal trajectories for iLQR
+  # x_nominal = [np.array([
+  #     [0],
+  #     [0],
+  #     [0],
+  #     [0]
+  #   ])] * (cartpole.N + 1)
+  # x_nominal[0] = x_initial
+  # u_nominal = [np.array([[0]])] * cartpole.N
+  x_nominal = x
+  u_nominal = u
+
+  # TODO Test with Steven nominal trajectories
+  # with open('x_ref.pickle', 'rb') as file:
+  #   loaded_array = pickle.load(file)
+  # x_nominal = loaded_array
+
+  # with open('u_ref.pickle', 'rb') as file:
+  #   loaded_array = pickle.load(file)
+  # u_nominal = loaded_array
 
   # Run iLQR algorithm to find optimal trajectory
-  x, u = cartpole.ilqr(x_initial, u_nominal, Q, R)
+  x, u = cartpole.ilqr(x_nominal, u_nominal, Q, R)
+
+  # return
 
   # Retrieve data for plots
   time_values = [t * time_step for t in range(cartpole.N + 1)]
