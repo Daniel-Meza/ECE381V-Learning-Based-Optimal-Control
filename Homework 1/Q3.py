@@ -166,19 +166,60 @@ class CartPole:
                   (self.J_t * (self.M_t / self.m)) - 
                   (self.m * (self.l * c_theta)**2))
 
+    # Define input vectors
+    x_vars = np.array([[q], [theta], [q_dot], [theta_dot]])
+    u_vars = np.array([[u]])
+
     # State derivative vector
     x_dot = sp.Matrix([q_dot, theta_dot, q_ddot, theta_ddot])
 
     # Partial derivations (Jacobians)
-    x_vars = sp.Matrix([q, theta, q_dot, theta_dot])
-    Ak = x_dot.jacobian(x_vars)    # with respect to x
-    u_vars = sp.Matrix([u])
-    Bk = x_dot.jacobian(u_vars)    # with respect to u
+    f = x_vars + x_dot * self.Ts
+    Ak = f.jacobian(x_vars)      # with respect to x
+    Bk = f.jacobian(u_vars)      # with respect to u
 
     # Convert symbolic expressions to numerical functions
-    self.x_func = sp.lambdify((q, theta, q_dot, theta_dot, u), x_dot, 'numpy')
-    self.Ak_func = sp.lambdify((q, theta, q_dot, theta_dot, u), Ak, 'numpy')
-    self.Bk_func = sp.lambdify((q, theta, q_dot, theta_dot, u), Bk, 'numpy')
+    self.x_func = sp.lambdify((x_vars, u_vars), x_dot, 'numpy')
+    self.Ak_func = sp.lambdify((x_vars, u_vars), Ak, 'numpy')
+    self.Bk_func = sp.lambdify((x_vars, u_vars), Bk, 'numpy')
+
+
+  def calculate_derivative(self, x_curr: np.ndarray, u_curr: np.ndarray) -> np.ndarray:
+    """
+    For the given state and control, returns the derivative of the system based on the equations of motion.
+    Inputs:
+      x: current state
+      u: current control input
+    Returns:
+      x_dot: state derivative
+    """
+    # Calculate system dynamics
+    # Continuous-Time system dynamics from Feedback Systems textbook, Example 3.2 Balance Systems
+    u = u_curr[0][0]
+    s_theta = np.sin(x_curr[1])[0]   # sin(theta)
+    c_theta = np.cos(x_curr[1])[0]   # cos(theta)
+
+    # Equations of motion
+    q_dot = x_curr[2][0]
+    theta_dot = x_curr[3][0]
+    q_ddot = ((-self.m * self.l * s_theta * theta_dot**2) + 
+              (self.m * self.g * (self.m * self.l**2 / self.J_t) * s_theta * c_theta) - 
+              (self.c * q_dot) - 
+              ((self.lamb / self.J_t) * self.m * self.l * c_theta * theta_dot) +
+              u) / (
+              self.M_t - 
+              (self.m * (self.m * self.l**2 / self.J_t) * c_theta**2))
+    theta_ddot = ((-self.m * self.l**2 * s_theta * c_theta * theta_dot**2) +
+                  (self.M_t * self.g * self.l * s_theta) -
+                  (self.c * self.l * c_theta * theta_dot) -
+                  (self.lamb * (self.M_t / self.m) * theta_dot) +
+                  (self.l * c_theta * u)) / (
+                  (self.J_t * (self.M_t / self.m)) - 
+                  (self.m * (self.l * c_theta)**2))
+
+    x_dot = np.array([[q_dot], [theta_dot], [q_ddot], [theta_ddot]])
+
+    return x_dot
 
 
   def next_state(self, x_curr: np.ndarray, u_curr: np.ndarray) -> np.ndarray:
@@ -191,12 +232,54 @@ class CartPole:
       x_next: next state
     """
     # Calculate system derivative
-    x_dot = self.x_func(x_curr[0][0], x_curr[1][0], x_curr[2][0], x_curr[3][0], u_curr[0][0])
+    x_dot = np.reshape(self.x_func(x_curr, u_curr), (4, 1))
+    # x_dot = self.calculate_derivative(x_curr, u_curr)
 
     # Discretize system dynamics with an approximation using the time step
     x_next = x_curr + self.Ts * x_dot   # Euler integration
 
     return x_next
+
+
+  def approx_A_B_numerically(self, x_curr: np.ndarray, u_curr: np.ndarray, eps=1e-3) -> tuple[np.ndarray]:
+    """
+    For the given state and control,  returns approximations of the A_k, B_k (the Jacobians of the dynamics in terms of state and control).
+    matrices.
+    Inputs:
+      x_curr: 2D array of shape (n, 1)
+      u_curr: 2D array of shape (m, 1)
+    Returns:
+      A_k: 2D array of shape (n, n)
+      B_k: 2D array of shape (n, m)
+    """
+    n = x_curr.shape[0]    # state dimension
+    m = u_curr.shape[0]    # control dimension
+
+    A = np.zeros((n, n))
+    B = np.zeros((n, m))
+
+    # Linearize the system around the given state and control by adding small perturbation
+    # Compute A matrix (partial derivative of f with respect to x)
+    for i in range(n):
+      dx = np.zeros_like(x_curr)
+      dx[i] = eps
+      f_plus = self.calculate_derivative(x_curr + dx, u_curr)
+      f_minus = self.calculate_derivative(x_curr - dx, u_curr)
+      A_col = (f_plus - f_minus) / (2 * eps)
+      A[:,i] = A_col[:,0]
+
+    # Compute B matrix (partial derivative of f with respect to u)
+    for i in range(m):
+      du = np.zeros_like(u_curr)
+      du[i] = eps
+      f_plus = self.calculate_derivative(x_curr, u_curr + du)
+      f_minus = self.calculate_derivative(x_curr, u_curr - du)
+      B_col = (f_plus - f_minus) / (2 * eps)
+      B[:,i] = B_col[:,0]
+
+    # TODO This is wrong as it's not taking into account f = x + x_dot * self.Ts
+
+    return A, B
 
 
   def approx_A_B(self, x_curr: np.ndarray, u_curr: np.ndarray) -> tuple[np.ndarray]:
@@ -210,10 +293,10 @@ class CartPole:
       A_k: 2D array of shape (n, n)
       B_k: 2D array of shape (n, m)
     """
-
     # Evaluate A and B using the symbolic dynamics equations
-    A_k = self.Ak_func(x_curr[0][0], x_curr[1][0], x_curr[2][0], x_curr[3][0], u_curr[0][0])
-    B_k = self.Bk_func(x_curr[0][0], x_curr[1][0], x_curr[2][0], x_curr[3][0], u_curr[0][0])
+    A_k = self.Ak_func(x_curr, u_curr)
+    B_k = self.Bk_func(x_curr, u_curr)
+    # A, B = self.approx_A_B_numerically(x_curr, u_curr)
 
     return A_k, B_k
 
@@ -240,21 +323,14 @@ class CartPole:
 
     # Loop forward
     for k in range(self.N):
-      # print("+++" + str(k) + "+++")
       # Correct the control input
       u_new[k] = u_nominal[k] + K[k] @ (x_new[k] - x_nominal[k]) + d[k]
-
-      # print("a")
 
       # Calculate next state
       x_new[k + 1] = self.next_state(x_new[k], u_new[k])
 
-      # print("b")
-
       # Update trajectory cost
       J_total += 1/2 * (x_new[k].T @ Q @ x_new[k] + u_new[k].T @ R @ u_new[k]).item()
-      
-      # print("c")
 
     # Add terminal cost
     J_total += (x_new[self.N].T @ Q @ x_new[self.N]).item()
@@ -262,7 +338,7 @@ class CartPole:
     return x_new, u_new, J_total
 
 
-  def backward_pass(self, x_new: list[np.ndarray], u_new: list[np.ndarray], Q: np.ndarray, R: np.ndarray, H=np.array([[0], [0], [0], [0]])):
+  def backward_pass(self, x_new: list[np.ndarray], u_new: list[np.ndarray], Q: np.ndarray, R: np.ndarray, H=np.array([[0], [0], [0], [0]])) -> tuple[list[np.ndarray], list[np.ndarray]]:
     """
     Perform the backward pass of iLQR to compute the feedforward control updates and feedback gains.
     Inputs:
@@ -272,8 +348,8 @@ class CartPole:
       R: control cost matrix
       H: bilinear cost matrix
     Returns:
-      d:
-      K:
+      d: feedforward control update
+      K: feedback gain matrix
     """
     # Create lists for necessary variables
     d = [None] * self.N
@@ -281,15 +357,12 @@ class CartPole:
 
     # Initialize value function at final step
     S = Q
-    s = Q @ (x_new[self.N])   # Desired final state is an array of 0s
+    s = Q @ x_new[self.N]   # Desired final state is an array of 0s
 
     # Loop backward
     for k in range(self.N - 1, -1, -1):
-      # print("-" + str(k) + "-")
       # Linearize around the current trajectory
       A_k, B_k = self.approx_A_B(x_new[k], u_new[k])
-
-      # print("A")
 
       # Calculate stage cost derivatives
       l_x = Q @ x_new[k]    # (4, 1)
@@ -300,24 +373,19 @@ class CartPole:
       l_ux = H.T            # (1, 4)
 
       # Compute Q terms
-      Q_x = l_x + A_k.T @ s               # (4, 1)
-      Q_u = l_u + B_k.T @ s               # (1, 1)
+      Q_x = l_x + A_k.T @ s             # (4, 1)
+      Q_u = l_u + B_k.T @ s             # (1, 1)
       Q_xx = l_xx + A_k.T @ S @ A_k     # (4, 4)
       Q_uu = l_uu + B_k.T @ S @ B_k     # (1, 1)
       Q_ux = l_ux + B_k.T @ S @ A_k     # (1, 4)
 
-      # print("B")
-
       # Update the feedback law
       d[k] = -np.linalg.inv(Q_uu) @ Q_u   # (1, 1)
       K[k] = -np.linalg.inv(Q_uu) @ Q_ux  # (1, 4)
-      # print("C")
 
       # Update the value function approximation
       s = Q_x + K[k].T @ Q_uu @ d[k] + K[k].T @ Q_u + Q_ux.T @ d[k]   # (4, 1)
       S = Q_xx + K[k].T @ Q_uu @ K[k] + K[k].T @ Q_ux + Q_ux.T @ K[k]   # (4, 4)
-
-      # print("D")
 
     return d, K
 
@@ -336,8 +404,8 @@ class CartPole:
       u: calculated control trajectory (optimal)
     """
     # Define number of iterations and tolerance
-    max_iterations = 10
-    tolerance = 1e-3
+    max_iterations = 25
+    tolerance = 1e-5
 
     # Initialize full system dynamics
     self.initialize_dynamics()
@@ -346,28 +414,15 @@ class CartPole:
     x_nominal = x_nominal_initial
     u_nominal = u_nominal_initial
 
-    print(x_nominal[0])
-    print(u_nominal[0])
-    x_dot = self.x_func(x_nominal[0][0], x_nominal[1][0], x_nominal[2][0], x_nominal[3][0], u_nominal[0][0])
-    print(x_dot)
-
-    exit()
-
     J_prev = 0   # Big number to prevent convergence
 
     # Iterate between forward and backward pass until convergence
     for i in range(max_iterations):
-      print("---" + str(i) + "---")
-
       # Backward pass to compute feedforward and feedback gains
       d, K = self.backward_pass(x_nominal, u_nominal, Q, R)
-      print("BBBBB")
 
       # Forward pass to generate new state and control trajectories
       x_nominal, u_nominal, J_total = self.forward_pass(x_nominal, u_nominal, d, K, Q, R)
-      print("FFFFF")
-
-      print(J_total)
 
       # Check for convergence based on the change in cost
       cost_diff = abs(J_total - J_prev)
@@ -376,7 +431,55 @@ class CartPole:
         break
       J_prev = J_total
 
+      print(i)
+
+      # create_plots(self.Ts, self.Th, x_nominal, u_nominal)
+
     return x_nominal, u_nominal
+
+
+def create_plots(time_step: float, time_horizon: float, title: str, x: list[np.ndarray], u: list[np.ndarray], x1=None, u1=None):
+  N = int(time_horizon / time_step)
+
+  if not (x1 and u1):
+    # Single plots for LQR
+    # Retrieve data for plots
+    time_values = [t * time_step for t in range(N + 1)]
+    states = [float(x_k[1][0]) for x_k in x]
+    controls = [float(u_k[0][0]) for u_k in u]
+
+    # Create plots for state and control trajectories
+    _, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6))
+    ax1.plot(time_values, states, label='state', color='blue')
+    ax1.set_xlabel('Time (s)')
+    ax2.plot(time_values[:-1], controls, label='control', color='orange')
+    ax2.set_xlabel('Time (s)')
+    ax1.legend()
+    ax2.legend()
+    plt.suptitle(title)
+    plt.show()
+  else:
+    # Double plots for iLQR
+    # Retrieve data for plots
+    time_values = [t * time_step for t in range(N + 1)]
+    states = [float(x_k[1][0]) for x_k in x]
+    controls = [float(u_k[0][0]) for u_k in u]
+    states_1 = [float(x_k[1][0]) for x_k in x1]
+    controls_1 = [float(u_k[0][0]) for u_k in u1]
+
+    # Create plots for state and control trajectories
+    _, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6))
+    ax1.plot(time_values, states, label='state_original', color='gray')
+    ax1.plot(time_values, states_1, label='state_final', color='blue')
+    ax1.set_xlabel('Time (s)')
+    ax2.plot(time_values[:-1], controls, label='control_original', color='gray')
+    ax2.plot(time_values[:-1], controls_1, label='control_final', color='orange')
+    ax2.set_xlabel('Time (s)')
+    ax1.legend()
+    ax2.legend()
+    plt.suptitle(title)
+    plt.show()
+
 
 
 def main():
@@ -384,72 +487,69 @@ def main():
   time_step = 0.1
   time_horizon = 10
 
+  # Create the cartpole object
+  cartpole = CartPole(time_step, time_horizon)
+
+  '''LQR'''
+  # Define state cost and control cost matrices
+  Q_lqr = np.array([
+    [1, 0, 0, 0],
+    [0, 1000, 0, 0],
+    [0, 0, 1, 0],
+    [0, 0, 0, 10]
+  ])
+  R_lqr = np.array([
+    [0.1]
+  ])
+
   # Define initial state [q, theta, q_dot, theta_dot]
   x_initial = np.array([
     [0],
-    [0.174533 * 1],
+    [0.174533 * 3],
     [0],
     [0]
   ])
 
+  # Run LQR algorithm to find optimal trajectory
+  x_lqr, u_lqr = cartpole.lqr(x_initial, Q_lqr, R_lqr)
+
+  # # Write data file
+  # with open('Files/x_sample_1.pickle', 'wb') as file:
+  #   pickle.dump(x_lqr, file)
+  # with open('Files/u_sample_1.pickle', 'wb') as file:
+  #   pickle.dump(u_lqr, file)
+  # return
+
+  # Plot results
+  # create_plots(time_step, time_horizon, 'LQR, 30deg, 10sec', x_lqr, u_lqr)
+
+  '''iLQR'''
   # Define state cost and control cost matrices
-  Q = np.array([
+  Q_ilqr = np.array([
     [1, 0, 0, 0],
     [0, 1000, 0, 0],
     [0, 0, 1, 0],
-    [0, 0, 0, 1]
+    [0, 0, 0, 10]
   ])
-  R = np.array([
+  R_ilqr = np.array([
     [0.1]
   ])
 
-  # Create the cartpole object
-  cartpole = CartPole(time_step, time_horizon)
-
-  # Run LQR algorithm to find optimal trajectory
-  x, u = cartpole.lqr(x_initial, Q, R)
-
   # Define nominal trajectories for iLQR
-  # x_nominal = [np.array([
-  #     [0],
-  #     [0],
-  #     [0],
-  #     [0]
-  #   ])] * (cartpole.N + 1)
-  # x_nominal[0] = x_initial
-  # u_nominal = [np.array([[0]])] * cartpole.N
-  x_nominal = x
-  u_nominal = u
+  x_nominal = x_lqr
+  u_nominal = u_lqr
 
-  # TODO Test with Steven nominal trajectories
-  # with open('x_ref.pickle', 'rb') as file:
-  #   loaded_array = pickle.load(file)
-  # x_nominal = loaded_array
-
-  # with open('u_ref.pickle', 'rb') as file:
-  #   loaded_array = pickle.load(file)
-  # u_nominal = loaded_array
+  # # Read data file
+  # with open('Files/x_sample_1.pickle', 'rb') as file:
+  #   x_nominal = pickle.load(file)
+  # with open('Files/u_sample_1.pickle', 'rb') as file:
+  #   u_nominal = pickle.load(file)
 
   # Run iLQR algorithm to find optimal trajectory
-  x, u = cartpole.ilqr(x_nominal, u_nominal, Q, R)
+  x_ilqr, u_ilqr = cartpole.ilqr(x_nominal, u_nominal, Q_ilqr, R_ilqr)
 
-  # return
-
-  # Retrieve data for plots
-  time_values = [t * time_step for t in range(cartpole.N + 1)]
-  states = [float(x_k[1][0]) for x_k in x]
-  controls = [float(u_k[0][0]) for u_k in u]
-  controls.append(0.0)  # to match dimensions
-
-  # Create plots
-  _, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6))
-  ax1.plot(time_values, states, label='state', color='blue')
-  ax1.set_xlabel('Time (s)')
-  ax1.legend()
-  ax2.plot(time_values, controls, label='control', color='orange')
-  ax2.set_xlabel('Time (s)')
-  ax2.legend()
-  plt.show()
+  # Plot results
+  create_plots(time_step, time_horizon, 'iLQR, 30deg, 20sec', x_nominal, u_nominal, x_ilqr, u_ilqr)
 
 
 if __name__ == "__main__":
