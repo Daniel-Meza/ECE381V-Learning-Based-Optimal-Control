@@ -1,30 +1,3 @@
-### Comments from Office Hours ###
-# 1. Add u_previous to the state matrix.
-#    Change the action vector to deltaU
-
-# 2. Official solution writes everything out.
-#    Different solution can be to re-define.
-
-# 3. Do not use cvxpy
-# 3. LQR
-# - First linearize the dynamics
-# - Then define our own cost matrices (his control cost = 0.001)
-# - Steps 4 and 5 in dynamic programming is a forward loop!
-
-# 3. iLQR
-# - Working problem 2 can help with derivation for iLQR
-# - Initial nominal trajectory can be u_bar = [0, ...], x_bar = [x0, 0, ...] and it still converges
-# Backward Pass
-# - Gives you an array of K matrices
-# - Initialize with delta_x = 0
-# - At t = 0, compute delta_u using K matrix in the affine term
-# - ...
-# - Returns trajectories for deltaX and deltaU
-# - Run the true dynamics
-# Forward Pass
-# - Take solution and forward propagrate with true dynamics to find new trajectory.
-
-
 import numpy as np
 import sympy as sp
 import matplotlib.pyplot as plt
