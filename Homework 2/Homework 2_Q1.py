@@ -21,7 +21,7 @@ def main():
   # constraints = [-x <= 0,
   #                cp.sum(x) - 1 == 0]    # same result
 
-  # Define and solve problem
+  # Define and Solve Problem
   problem = cp.Problem(objective, constraints)
   problem.solve()
 
