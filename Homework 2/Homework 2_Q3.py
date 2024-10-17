@@ -230,8 +230,6 @@ def main():
   # Run LQR quadratic program solver to find optimal trajectory
   x_qp, u_qp = cartpole.qp(x_initial, Q, R)
 
-  u_qp[-1] = u_qp[-2]
-
   # Calculate difference in solutions
   N = int(time_horizon / time_step)
   x_diff = [x_lqr[k] - x_qp[k] for k in range(N + 1)]
