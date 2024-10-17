@@ -65,7 +65,7 @@ class CartPole:
     return x_next
 
 
-  def lqr(self, x_initial: np.ndarray, Q: np.ndarray, R: np.ndarray) -> tuple[list[np.ndarray], list[np.ndarray]]:
+  def lqr(self, x_initial: np.ndarray, Q: np.ndarray, R: np.ndarray) -> tuple[list[np.ndarray], list[np.ndarray], float]:
     """
     Discrete-time linear quadratic regulator for a linear system.
     Compute the optimal control inputs for a linear system given current state and cost matrices. I.e. compute the control input that minimizes the cumulative cost.
@@ -76,6 +76,7 @@ class CartPole:
     Returns:
       x: calculated states (optimal trajectory)
       u: calculated controls (optimal trajectory)
+      cost: total cost from following the optimal trajectories
     """
     # Initialize the system dynamics
     self.initialize_linear_dynamics()
@@ -100,15 +101,18 @@ class CartPole:
     # Set initial state
     x[0] = x_initial
 
-    # Forward loop to calculate trajectory
+    # Forward loop to calculate trajectory and total cost
+    cost = 0
     for k in range(self.N):
       u[k] = L[k] @ x[k]
       x[k + 1] = self.next_linear_step(x[k], u[k])
+      cost += 1/2 * (x[k].T @ Q @ x[k] + u[k].T @ R @ u[k]).item()
+    cost += 1/2 * (x[self.N].T @ Q @ x[self.N]).item()    # add terminal cost
 
-    return x, u
+    return x, u, cost
 
 
-  def qp(self, x_initial: np.ndarray, Q: np.ndarray, R: np.ndarray) -> tuple[list[np.ndarray], list[np.ndarray]]:
+  def qp(self, x_initial: np.ndarray, Q: np.ndarray, R: np.ndarray) -> tuple[list[np.ndarray], list[np.ndarray], float]:
     """
     Solve the discrete-time linear quadratic regulator linearized about 0 by reqriting it as a quadratic program and using the cvxpy solver.
     Compute the optimal control inputs given the current state and cost matrices. I.e. compute the control input that minimizes the cumulative cost. 
@@ -117,8 +121,9 @@ class CartPole:
       Q: state cost matrix
       R: control cost matrix
     Returns:
-      x: calculated states (optimal trajectory)
-      u: calculated controls (optimal trajectory)
+      x_star: calculated states (optimal trajectory)
+      u_star: calculated controls (optimal trajectory)
+      cost: total cost from following the calculated trajectories
     """
     # Initialize the system dynamics
     self.initialize_linear_dynamics()
@@ -132,7 +137,7 @@ class CartPole:
     for k in range(self.N - 1):
       c += cp.quad_form(x[k], Q) + cp.quad_form(u[k], R)   # running cost
     c += cp.quad_form(x[k], Q)   # terminal cost
-    objective = cp.Minimize(c)
+    objective = cp.Minimize(1/2 * c)
 
     # Constraints
     constraints = [x[0] == x_initial]    # initial state
@@ -150,8 +155,9 @@ class CartPole:
       x_star.append(x[k].value)
       u_star.append(u[k].value)
     x_star.append(x[self.N].value)  # terminal state
+    cost = problem.value    # total cost that was minimized
 
-    return x_star, u_star
+    return x_star, u_star, cost
 
 
 def create_plots(time_step: float, time_horizon: float, title: str, x: list[np.ndarray], u: list[np.ndarray], x1=None, u1=None):
@@ -200,7 +206,7 @@ def create_plots(time_step: float, time_horizon: float, title: str, x: list[np.n
 def main():
   # Define time step and horizon for the control problem
   time_step = 0.01
-  time_horizon = 10
+  time_horizon = 20
 
   # Create the cartpole object
   cartpole = CartPole(time_step, time_horizon)
@@ -219,16 +225,20 @@ def main():
   # Define initial state [q, theta, q_dot, theta_dot]
   x_initial = np.array([
     [0],
-    [0.174533 * 1],
+    [0.174533 * 3],
     [0],
     [0]
   ])
 
   # Run LQR dynamic programming algorithm to find optimal trajectory
-  x_lqr, u_lqr = cartpole.lqr(x_initial, Q, R)
+  x_lqr, u_lqr, cost_lqr = cartpole.lqr(x_initial, Q, R)
 
   # Run LQR quadratic program solver to find optimal trajectory
-  x_qp, u_qp = cartpole.qp(x_initial, Q, R)
+  x_qp, u_qp, cost_qp = cartpole.qp(x_initial, Q, R)
+
+  # print(cost_lqr)
+  # print(cost_qp)
+  # u_qp[-1] = u_qp[-2]
 
   # Calculate difference in solutions
   N = int(time_horizon / time_step)
@@ -236,8 +246,8 @@ def main():
   u_diff = [u_lqr[k] - u_qp[k] for k in range(N)]
 
   # Plot results
-  create_plots(time_step, time_horizon, 'DP vs QP, 30deg, 20sec', x_lqr, u_lqr, x_qp, u_qp)
-  # create_plots(time_step, time_horizon, 'Difference, 30deg, 20sec', x_diff, u_diff)
+  # create_plots(time_step, time_horizon, 'DP vs QP, 30deg, 20sec', x_lqr, u_lqr, x_qp, u_qp)
+  create_plots(time_step, time_horizon, 'Difference, 30deg, 20sec', x_diff, u_diff)
 
 
 if __name__ == "__main__":
