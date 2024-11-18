@@ -4,7 +4,7 @@ from matplotlib.ticker import MaxNLocator
 
 
 class GridWorld:
-  def __init__(self, n: int, s_goal, gamma: float = 0.99, epsilon: float = 1e-4):
+  def __init__(self, n: int, s_goal: tuple[int, int], gamma: float = 0.99, epsilon: float = 1e-4):
     """
     Initialize the gridworld environment.
     Inputs:
@@ -233,6 +233,45 @@ class GridWorld:
         break
 
     return self.V, self.pi
+  
+
+  def simulate_trajectory(self, s_initial: tuple[int, int], max_steps = 100) -> np.ndarray:
+    """
+    TODO
+    """
+    # Initialize grid map for the robot path
+    path = np.zeros((self.n, self.n))
+    x, y = s_initial
+    path[x, y] = 1
+
+    # Follow the policy until the goal is reached
+    steps = 0
+    while steps < max_steps:
+      # Get the action to take from the policy map
+      index = int(self.pi[x, y])
+      a = list(self.policy_map.keys())[index]
+
+      # Calculate the next state (x', y') and check for out-of-bounds
+      x_prime = x + self.action_map[a][0]
+      y_prime = y + self.action_map[a][1]
+      
+      if self.is_out_of_bounds((x_prime, y_prime)):
+        x_prime, y_prime = x, y
+
+      # Move to the next state
+      x, y = x_prime, y_prime
+      path[x, y] = 1
+
+      # Stop if the goal is reached
+      if (x, y) == self.s_goal:
+        print("[Trajectory Simulation] Reached goal in %d steps", (steps))
+        break
+
+    # Goal not reached
+    if steps >= max_steps:
+      print("[Trajectory Simulation] Stopped simulation after %d steps", (steps))
+    
+    return path
 
 
   def plot_heatmap(self, map: np.ndarray, title = ''):
@@ -263,12 +302,15 @@ def main():
   # value_function_p, policy_p = grid_world.policy_iteration_method()
 
   # Simulate robot trajectory
+  path = grid_world.simulate_trajectory((0, 0))
 
   # Plot results
   grid_world.plot_heatmap(value_function_v, 'Value Function Heatmap (Value Iteration)')
   grid_world.plot_heatmap(policy_v, 'Policy Heatmap (Value Iteration)')
+  grid_world.plot_heatmap(path, 'Robot Trajectory (Value Iteration)')
   # grid_world.plot_heatmap(value_function_p, 'Value Function Heatmap (Policy Iteration)')
   # grid_world.plot_heatmap(policy_p, 'Policy Heatmap (Policy Iteration)')
+  # grid_world.plot_heatmap(path, 'Robot Trajectory (Policy Iteration)')
   
 
 
