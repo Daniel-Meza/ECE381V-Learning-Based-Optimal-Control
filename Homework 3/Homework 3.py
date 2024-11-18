@@ -4,7 +4,7 @@ from matplotlib.ticker import MaxNLocator
 
 
 class GridWorld:
-  def __init__(self, n: int, s_goal: tuple[int, int], gamma: float = 0.99, epsilon: float = 1e-4):
+  def __init__(self, n: int, s_goal: tuple[int, int], gamma: float = 0.99, epsilon: float = 1e-5):
     """
     Initialize the gridworld environment.
     Inputs:
@@ -37,7 +37,11 @@ class GridWorld:
 
   def is_out_of_bounds(self, state):
     """
-    TODO
+    Checks if a state is outside the grid boundaries.
+    Inputs:
+      state: tuple (x, y)
+    Returns:
+      True if out of bounds, False otherwise
     """
     x, y = state
     out_of_bounds = x < 0 or x >= self.n or y < 0 or y >= self.n
@@ -47,10 +51,14 @@ class GridWorld:
 
   def value_iteration(self, max_iters):
     """
-    TODO
+    Performs value iteration to compute the optimal value function.
+    Uses out-of-place updates for stability (using a copy of the value function during each sweep).
+    Inputs:
+      max_iters: maximum number of iterations to limit infinite loop
     """
     for i in range(max_iters):
       delta = 0   # variable for convergence check
+      new_V = np.copy(self.V)   # temporary copy to store updates
 
       # Iterate through grid updating the reward value at each cell
       for x in range(self.n):
@@ -91,10 +99,12 @@ class GridWorld:
             best_expected_value = max(best_expected_value, expected_value)
 
           # Update the value function at (x, y) and track change in values for convergence
-          # TODO delta not converging to 0, running all max_iters every time
-          # delta += best_expected_value - V[x, y]
+          # delta += abs(best_expected_value - self.V[x, y])
           delta = max(delta, abs(best_expected_value - self.V[x, y]))
-          self.V[x, y] = expected_value
+          new_V[x, y] = best_expected_value
+
+      # Update the value function after a full sweep
+      self.V = new_V
 
       # Check for convergence
       if delta < self.epsilon:
@@ -102,10 +112,11 @@ class GridWorld:
         break
 
 
-
   def policy_improvement(self) -> bool:
     """
-    TODO
+    Improves the current policy based on the current value function.
+    Returns:
+      True if the policy is stable (no actions changed), False otherwise
     """
     policy_stable = True
 
@@ -115,6 +126,11 @@ class GridWorld:
         # Skip the goal state
         if (x, y) == self.s_goal:
           continue
+
+        # Store the current action to check for stability (needed for policy iteration)
+        old_action = list(self.policy_map.keys())[int(self.pi[x, y])]
+
+        # TODO Need to consider stochastic behavior in actions?
 
         # Evaluate all possible to actions to find the best one
         best_action = None
@@ -134,7 +150,6 @@ class GridWorld:
             best_action = a
         
         # Update the policy at (x, y)
-        old_action = self.pi[x, y]
         self.pi[x, y] = self.policy_map[best_action]
 
         # Check if the policy changed
@@ -144,27 +159,12 @@ class GridWorld:
     return policy_stable
 
 
-  def value_iteration_method(self, max_iters = 1000) -> tuple[np.ndarray, np.ndarray]:
-    """
-    TODO
-    """
-    # Initialize Value Function (zeros)
-    self.V = np.zeros((self.n, self.n))
-    self.V[self.s_goal] = 1
-
-    # Initialize Policy ('up')
-    self.pi = np.zeros((self.n, self.n))
-
-    # Calculate optimal value function and respective policy
-    self.value_iteration(max_iters)
-    _ = self.policy_improvement()
-
-    return self.V, self.pi
-
-
   def policy_evaluation(self, max_iters):
     """
-    TODO This is extremely similar to value_iteration, make methods?
+    Evaluates the value function for the current policy.
+    Uses in-place updates for faster convergence (directly use previous calculate values during the sweep).
+    Inputs:
+      max_iters: maximum number of iterations to limit infinite loop
     """
     for i in range(max_iters):
       delta = 0   # variable for convergence check
@@ -203,18 +203,43 @@ class GridWorld:
             expected_value += prob * (reward + self.gamma * self.V[x_prime, y_prime])
 
           # Update the value function at (x, y) and track change in values for convergence
-          # TODO Same convergence problem as in value iteration?
+          # delta += abs(expected_value - self.V[x, y])
           delta = max(delta, abs(expected_value - self.V[x, y]))
           self.V[x, y] = expected_value
       
       # Check for convergence
       if delta < self.epsilon:
+        print("[Policy Evaluation] Converged in %d iterations with a difference of %f" % (i, delta))
         break
+
+
+  def value_iteration_method(self, max_iters = 1000) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Executes the value iteration method to find the optimal value function and policy.
+    Returns:
+      V: Optimal value function as a 2D numpy array
+      pi: Optimal policy as a 2D numpy array
+    """
+    # Initialize Value Function (zeros)
+    self.V = np.zeros((self.n, self.n))
+    self.V[self.s_goal] = 1
+
+    # Initialize Policy ('up')
+    self.pi = np.zeros((self.n, self.n))
+
+    # Calculate optimal value function and respective policy
+    self.value_iteration(max_iters)
+    _ = self.policy_improvement()
+
+    return self.V, self.pi
 
 
   def policy_iteration_method(self, max_iters = 1000) -> tuple[np.ndarray, np.ndarray]:
     """
-    TODO This method is not working!
+    Executes the policy iteration method to find the optimal value function and policy.
+    Returns:
+      V: Optimal value function as a 2D numpy array
+      pi: Optimal policy as a 2D numpy array
     """
     # Initialize Value Function (zeros)
     self.V = np.zeros((self.n, self.n))
@@ -237,7 +262,12 @@ class GridWorld:
 
   def simulate_trajectory(self, s_initial: tuple[int, int], max_steps = 100) -> np.ndarray:
     """
-    TODO
+    Simulates a robot moving from an initial state to the goal state given the current policy.
+    Input:
+      s_initial: initial state of the robot (x, y)
+      max_steps: limit to prevent robot not getting stuck without reaching the goal
+    Returns:
+      path: Trajectory taken by the robot as a 2D numpy array
     """
     # Initialize grid map for the robot path
     path = np.zeros((self.n, self.n))
@@ -276,7 +306,10 @@ class GridWorld:
 
   def plot_heatmap(self, map: np.ndarray, title = ''):
     """
-    TODO
+    Plots a heatmap of the given map (e.g., value function, policy, or trajectory).
+    Inputs:
+      map: 2D numpy array to plot
+      title: Title of the heatmap
     """
     plt.figure()
     heatmap = plt.imshow(map.T, origin='lower')   # transpose to align axes
@@ -302,16 +335,15 @@ def main():
   # value_function_p, policy_p = grid_world.policy_iteration_method()
 
   # Simulate robot trajectory
-  path = grid_world.simulate_trajectory((0, 0))
+  # path = grid_world.simulate_trajectory((0, 0))
 
   # Plot results
   grid_world.plot_heatmap(value_function_v, 'Value Function Heatmap (Value Iteration)')
   grid_world.plot_heatmap(policy_v, 'Policy Heatmap (Value Iteration)')
-  grid_world.plot_heatmap(path, 'Robot Trajectory (Value Iteration)')
+  # grid_world.plot_heatmap(path, 'Robot Trajectory (Value Iteration)')
   # grid_world.plot_heatmap(value_function_p, 'Value Function Heatmap (Policy Iteration)')
   # grid_world.plot_heatmap(policy_p, 'Policy Heatmap (Policy Iteration)')
   # grid_world.plot_heatmap(path, 'Robot Trajectory (Policy Iteration)')
-  
 
 
 if __name__ == "__main__":
