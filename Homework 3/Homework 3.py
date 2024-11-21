@@ -130,8 +130,6 @@ class GridWorld:
         # Store the current action to check for stability (needed for policy iteration)
         old_action = list(self.policy_map.keys())[int(self.pi[x, y])]
 
-        # TODO Need to consider stochastic behavior in actions?
-
         # Evaluate all possible to actions to find the best one
         best_action = None
         best_value = -np.inf
@@ -248,7 +246,7 @@ class GridWorld:
 
     # Initialize Policy ('up')
     self.pi = np.zeros((self.n, self.n))
-    self.pi[self.s_goal] = 4    # Set goal to a different value (for visualization)
+    self.pi[self.s_goal] = -1    # Set goal to a different value (for visualization)
 
     # Calculate optimal value function and respective stable policy
     for i in range(max_iters):
@@ -256,7 +254,7 @@ class GridWorld:
       policy_stable = self.policy_improvement()
 
       if policy_stable:
-        print("[Policy Iteration] Converged in %d iterations" % (i))
+        print("[Policy Iteration] Converged in %d iterations" % (i + 1))
         break
 
     return self.V, self.pi
@@ -329,6 +327,7 @@ class GridWorld:
 def main():
   # Create the grid world object
   size = 20
+  init = (0, 0)
   goal = (17, 6)
   grid_world = GridWorld(size, goal)
 
@@ -339,7 +338,7 @@ def main():
   # value_function_p, policy_p = grid_world.policy_iteration_method()
 
   # Simulate robot trajectory
-  path = grid_world.simulate_trajectory((0, 0))
+  path = grid_world.simulate_trajectory(init)
 
   # Plot results
   grid_world.plot_heatmap(value_function_v, 'Value Function Heatmap (Value Iteration)')
