@@ -1,0 +1,11 @@
+matplotlib==3.5.0
+pandas==1.3.4
+numpy==1.22.2
+swarm-visualizer @ git+https://github.com/UTAustin-SwarmLab/Swarm-Visualization@5a0240b9fabcc7e828d820213b3e680ae8632074
+tqdm==4.65.0
+typing_extensions==4.7.1
+gym==0.26.2
+pyvirtualdisplay==3.0
+gym[classic_control]
+imageio
+imageio[ffmpeg]
